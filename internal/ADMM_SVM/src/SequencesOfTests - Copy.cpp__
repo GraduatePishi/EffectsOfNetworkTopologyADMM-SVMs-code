@@ -1,0 +1,1398 @@
+#include "SequencesOfTests.h"
+#include "Types.h"
+#include "ChoosingT.h"
+#include "Kernel.h"
+#include "NodeSolver_linear.h"
+#include "NodeSolver.h"
+#include <iostream>
+#include "Partitioning.h"
+#include "FileReader.h"
+#include "Solver.h"
+#include "CrossValidation.h"
+#include "InverseOfMat.h"
+#include "NetworkCreation.h"
+#include "ReadDataset.h"
+#include "utils.h"
+#include "TestPhase.h"
+#include "Scaling.h"
+#include <math.h>
+#include "Randomizing.h"
+#include "FoldData.h"
+#include <algorithm>
+#include "ProblemSettings.h"
+#ifndef _MSC_VER
+#ifndef MPIRUN
+#include "pstl/execution"
+#include "pstl/algorithm"
+namespace my_paral = pstl;
+#endif
+#else
+#include <execution>
+namespace my_paral = std;
+#endif
+using namespace std;
+
+struct TestProblem
+{
+	TestProblem(int rows, int cols, int iReducedSize , double iJcTest, double iEtaTest, double iGamma, bool iADMMParam, std::string igraphFile)
+	{
+		Data = DataMatrix(rows, cols);
+		Data_lin = DataMatrix(rows, cols + 1);
+		Label = LabelVector(rows);
+		NoDataPoints = rows;
+		p_test = cols + 1;
+		L_test = iReducedSize;
+		JC_test = iJcTest;
+		EtaTest = iEtaTest;
+		wj_result= WeighVector::Ones(iReducedSize)*(-1000);
+		average_wi = WeighVector::Zero(iReducedSize);
+		initLambda = Multipliers::Ones(rows)*5.0;
+		initWj = WeighVector::Ones(iReducedSize)*5.0;
+		gamma = iGamma;
+		ADMMParam = iADMMParam;
+		graphFile = igraphFile;
+	}
+
+	DataMatrix Data;
+	Graph graph = Graph::line;
+	std::string graphFile;
+	DataMatrix Data_lin;
+	LabelVector Label;
+	Row NoDataPoints;
+	int p_test{ -1 };
+	int L_test{-1};
+	int nrNodes{ -1 };
+	double JC_test{ -1 };
+	double EtaTest{ -1 };
+	double gamma{ -1 };
+	bool ADMMParam;
+	WeighVector wj_result;
+	Bias bj_result=-1000;
+	Multipliers initLambda;
+	WeighVector initWj;
+	Bias init_bj = 5;
+	WeighVector average_wi; 
+	Bias average_bi = 0.0;
+	Neighbors neighborIndexes;
+	Multipliers lambda;
+	TypeForDesign Ttype;// = TypeForDesign::identity;
+	DimReductionMat consensusT;
+	TypeForKernel kerneltype;
+	string name;
+	string testTerminationCriteria ="AllThree";
+};
+
+enum class ProblemToTest
+{
+	SimpleLinear2_first6Values,
+	SimpleLinear2,
+	Simple1,
+	fourclass1,
+	ForBroad,
+	splice20GradTest,
+	fourclass100GradTest, 
+	heart,
+	splice,
+	spliceForHitRate,
+	simpleLinear2_16,
+	neighborsCheck
+};
+
+auto createTestProblem(ProblemToTest iVal)//int type)
+{
+	if (ProblemToTest::SimpleLinear2_first6Values == iVal)
+	{
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("simpleLinear2_first6values.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 200.0;//Best value for simpleLinear2 is eta=1 and JC=10, 200
+		double EtaTest = 1;
+		double gamma =0.0;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), (int)prob.Data.cols(), JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "simpleLinear2_first6values";
+		retProblem.Label = LabelVector((int)prob.Data.rows());
+		retProblem.Label = prob.lables;
+		retProblem.p_test = 3;
+		retProblem.L_test = 2;
+		retProblem.lambda = Multipliers::Ones(retProblem.NoDataPoints);
+		retProblem.nrNodes = 1;
+		retProblem.wj_result << -1, -1;
+		retProblem.bj_result = 3;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype= TypeForKernel::linear;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile,true);
+		//retProblem.neighborIndexes = getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, TypeForDesign::identity, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::SimpleLinear2 == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("simpleLinear2.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 200.0;
+		double EtaTest = 1.0;
+		double gamma = 0.5;
+		bool ADMMPar=false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(),(int)prob.Data.cols(), JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "simpleLinear2";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = 2;
+		retProblem.lambda = Multipliers::Ones(retProblem.NoDataPoints);
+		retProblem.nrNodes = 1;
+		retProblem.wj_result << -1, -1;
+		retProblem.bj_result = 3;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::linear;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.Ttype = TypeForDesign::identity;
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::simpleLinear2_16 == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("simpleLinear2_16.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 200.0;
+		double EtaTest = 1.0;
+		double gamma = 0.5;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), (int)prob.Data.cols(), JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.graph = Graph::cycle;
+		retProblem.Data = prob.Data;
+		retProblem.name = "simpleLinear2";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = 4;
+		retProblem.lambda = Multipliers::Ones(retProblem.NoDataPoints);
+		retProblem.nrNodes = 4;
+		//retProblem.wj_result << -1, -1;
+		//retProblem.bj_result = 3;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::linear;
+		retProblem.neighborIndexes = Network(retProblem.graph, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.Ttype = TypeForDesign::identity;
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::splice20GradTest == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("splice20.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 10;
+		double EtaTest = 1;
+		double gamma = 0.25;
+		int reducedSizeofT = 2;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "splice20";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.nrNodes = 1;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::fourclass100GradTest == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("fourclass100.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 10;
+		double EtaTest = 1;
+		double gamma = 0.25;
+		int reducedSizeofT = 2;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest,gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "fourclass100";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.nrNodes = 1;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::Simple1==iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("simple1.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 100;
+		double EtaTest = 1;
+		double gamma = 0.25;
+		int reducedSizeofT = 2;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "simple1";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.nrNodes = 1;
+		retProblem.wj_result << 0, 0;
+		retProblem.bj_result = 0;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT= ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::fourclass1 == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("fourclass1.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 5;
+		double EtaTest = 0.01;
+		double gamma = 0.25;
+		int reducedSizeofT = 2;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "fourclass1";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.nrNodes = 1;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::heart == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("heart.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 10;
+		double EtaTest = 1;
+		double gamma = 0.25;
+		int reducedSizeofT = 2;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.name = "heart";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.nrNodes = 1;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::splice == iVal)
+	{
+
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("splice.dat");
+
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 100;
+		double EtaTest = 0.1;
+		double gamma = 0.025;
+		int reducedSizeofT = (int)prob.Data.rows() / 2;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.graph = Graph::hardCoded;
+		retProblem.name = "splice";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.gamma = gamma;
+		retProblem.nrNodes = 1;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		//retProblem.neighborIndexes = Network(Graph::hardCoded, retProblem.nrNodes, retProblem.graphFile, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else if (ProblemToTest::spliceForHitRate == iVal)
+	{
+		std::string Dataset = ReadDataSetFile();
+		Dataset.append("splice.dat");
+		fs::path filePath = fs::u8path(Dataset);
+		const auto prob = FileReader(filePath);
+		double JC_test = 100;
+		double EtaTest = 0.1;
+		double gamma = 0.025;
+		int reducedSizeofT = 10;
+		bool ADMMPar = false;
+		std::string GraphFolder = "Regular";
+		TestProblem retProblem((int)prob.Data.rows(), (int)prob.Data.cols(), reducedSizeofT, JC_test, EtaTest, gamma, ADMMPar, GraphFolder);
+		retProblem.graphFile = GraphFolder;
+		retProblem.Data = prob.Data;
+		retProblem.graph = Graph::self;
+		retProblem.name = "splice";
+		retProblem.Label = prob.lables;
+		retProblem.L_test = reducedSizeofT;
+		retProblem.gamma = gamma;
+		retProblem.nrNodes = 4;
+		retProblem.initLambda = Multipliers::Ones((int)prob.Data.rows())*5.0;
+		retProblem.initWj = WeighVector::Ones(retProblem.L_test)*5.0;
+		retProblem.init_bj = 5.0;
+		retProblem.kerneltype = TypeForKernel::rbf;
+		retProblem.Ttype = TypeForDesign::random;
+		//retProblem.neighborIndexes = Network(Graph::self, retProblem.nrNodes, GraphFolder, true); //getNeighbors(retProblem.nrNodes);
+		retProblem.consensusT = ConsensusT(retProblem.L_test, retProblem.Data, retProblem.Ttype, EtaTest);
+		return retProblem;
+	}
+	else {
+		throw ExceptionError("No Problem is chosen!!!");
+	}
+}
+
+/**************** Start of tests *******************/
+bool CheckSpliceTime(TestProblem& problem) {
+	std::string Testset = ReadDataSetFile();
+	Testset.append("splice_validation.dat");
+	fs::path TestfilePath = fs::u8path(Testset);
+	const auto probTest = FileReader(TestfilePath);
+	nonlinear_svm SpliceSolver;
+	auto start = TimeType::now();
+	int iter = -1;
+	bool ADMMPar = false;
+	int iworld_size = -1, iworld_rank = -1;
+	bool iMPIflag = false;
+	double iEpsilonVal = 1e-3, iABDTOL=1e-4, iRELTOL=1e-2;
+	SpliceSolver.solve(iter, problem.Data, problem.Label, probTest.Data, probTest.lables, problem.consensusT, problem.kerneltype, problem.nrNodes,  problem.JC_test, problem.EtaTest, problem.gamma, false, problem.graph, ADMMPar, problem.graphFile, iworld_size, iworld_rank, iEpsilonVal, iABDTOL, iRELTOL,problem.testTerminationCriteria,false );
+	auto end = TimeType::now();
+	DurationTime time = (end - start);
+	double Elapsed_time_for_entire_solver;
+	Elapsed_time_for_entire_solver = std::chrono::duration_cast<TimePrec>(time).count();
+	std::cout << "Elapsed_time_for_entire_solver : " << Elapsed_time_for_entire_solver << "\n";
+
+	if (Elapsed_time_for_entire_solver < 8 || Elapsed_time_for_entire_solver >24) {
+		std::cout << "Time for splice is changed to " << Elapsed_time_for_entire_solver << " which is not similar to ~16 sec!!" << "\n";
+		throw ExceptionError("The time for splice is changed!!");
+	}
+	std::cout << "++++++++++Splice Time " << Elapsed_time_for_entire_solver << " is passed ++++++++++!!" << "\n";
+	return true;
+}
+
+bool HitRateSplice(TestProblem& problem) {
+	std::string Testset = ReadDataSetFile();
+	Testset.append("splice_validation.dat");
+	fs::path TestfilePath = fs::u8path(Testset);
+	const auto probTest = FileReader(TestfilePath);
+
+	nonlinear_svm SpliceSolver;
+	//int iteration = 0;
+	cout << "nr of nodes " << problem.nrNodes << "\n";
+	int iter = -1;
+	int iworld_size = -1, iworld_rank = -1;
+	bool iMPIflag = false;
+	double iEpsilonVal = 1e-3, iABSTOL=1e-4, iRELTOL=1e-2;
+	auto&& solving = SpliceSolver.solve(iter,problem.Data, problem.Label, probTest.Data, probTest.lables, problem.consensusT, problem.kerneltype, problem.nrNodes, problem.JC_test, problem.EtaTest, problem.gamma, false, problem.graph, problem.ADMMParam, problem.graphFile, iworld_size,iworld_rank,iEpsilonVal, iABSTOL,iRELTOL,problem.testTerminationCriteria,false);
+
+	if (std::get<3>(solving[0]) != 85) {
+		cout << "The hit Rate " << std::get<3>(solving[0]) << " is not 85 !!" << "\n";
+		throw ExceptionError("The hit Rate is wrong!!");
+	}
+	else if (std::get<3>(solving[1]) != 83) {
+		cout << "The hit Rate " << std::get<3>(solving[1]) << "is not 83 !!" << "\n";
+		throw ExceptionError("The hit Rate is wrong!!");
+	}
+	else if (std::get<3>(solving[2]) != 87) {
+		cout << "The hit Rate " << std::get<3>(solving[2]) << "is not 87 !!" << "\n";
+		throw ExceptionError("The hit Rate is wrong!!");
+	}
+	else if (std::get<3>(solving[3]) != 100) {
+		cout << "The hit Rate " << std::get<3>(solving[3]) << "is not 100 !!" << "\n";
+		throw ExceptionError("The hit Rate is wrong!!");
+	}
+	if (iter > 7) {
+		cout << "The iteration " << iter<< " is not 6 !!" << "\n";
+		throw ExceptionError("The iteration is not 6!!");
+	}
+	std::cout << "++++++++++Splice 4 node HitRate anf 6 iterations is passed !!++++++++++" << "\n";
+
+	return true;
+
+}
+bool runLinearVsNonLinear(TestProblem& problem)
+{
+	double epsilon = 1e-10;// std::numeric_limits<double>::epsilon() * 1e+10;
+	std::cout.precision(13);
+	WeightsAndBias Vj_test = WeighVector::Ones(problem.p_test)*(-20);
+	WeightsAndBias Vj_result((int)Vj_test.size());
+	Vj_result << -1, -1, 3;
+	DataMatrix FixedData_lin = problem.Data;
+	FixedData_lin.conservativeResize(problem.NoDataPoints, FixedData_lin.cols() + 1);
+	FixedData_lin.col(FixedData_lin.cols() - 1) = Eigen::VectorXd::Ones(problem.NoDataPoints); //adding column of ones to force wj and bj into Vj
+	//std::copy(begin(problem.neighborIndexes[0]), end(problem.neighborIndexes[0]), std::ostream_iterator<int>(std::cout, " \n"));
+	nodesolver_linear solverTest_lin(FixedData_lin, problem.Label, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest);
+	WeightsAndBias avarage_vi = WeightsAndBias::Zero(problem.p_test);
+
+	/*For nonlinear calculation*/
+	WeighVector wj= WeighVector::Ones(problem.L_test)*(-20);
+	Bias bj = -20;
+	WeightsAndBias wj_bj_test((int)problem.L_test+ 1);
+	wj_bj_test << wj, bj;
+	WeightsAndBias wj_bj_result((int)problem.L_test + 1);
+	wj_bj_result << problem.wj_result, problem.bj_result;
+
+	const bool Linear_test = true;
+	nodesolver solverTest_non(problem.initLambda, problem.initWj, problem.init_bj, problem.Data, problem.Label, problem.consensusT, problem.kerneltype, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest, problem.gamma);
+
+	/* Test for checking lambdas*/
+	Multipliers lambda_lin((int)problem.Data.rows());
+	lambda_lin = solverTest_lin.getLambdaj_lin();
+	Multipliers lambda_non = solverTest_non.getLambdaj();
+
+	for (int i = 0; i < Vj_test.size(); i++) {
+		if (lambda_lin[i] < 0 || lambda_lin[i] > problem.JC_test) {
+			throw ExceptionError("Lambdas are not in the correct range!");
+		}
+		if (lambda_non[i] < 0 || lambda_non[i] > problem.JC_test) {
+			throw ExceptionError("Lambdas are not in the correct range!");
+		}
+	}
+
+	if (lambda_lin != lambda_non)
+	{
+		std::cout << "lambda_lin " << "\n" << lambda_lin << "\n" << "lambda_non  " << "\n" << lambda_non << "\n";
+		throw ExceptionError("Lambdas are not same in linear and nonlinear cases!");
+	}
+	/*Check for the sizes*/
+	if ((int)wj.size() != problem.L_test || lambda_non.size() != problem.Data.rows())
+	{
+		std::cout << "The size of wj is " << (int)wj.size() << " and the size of L_test is  " << problem.L_test << "\n";
+		std::cout << "The size of lambda is " << lambda_non.size() << " and the size of problem.Data is  " << problem.Data.rows() << "\n";
+		throw ExceptionError("The size of problem for Ws are not correct");
+	}
+
+	/* Test for checking fjs*/
+	HyperPlaneScalars fj_lin = solverTest_lin.mfj;
+	HyperPlaneScalars fj_and_hj_non(fj_lin.size());
+	fj_and_hj_non << solverTest_non.mfTilde, solverTest_non.mhj;
+	if (fj_lin != fj_and_hj_non)
+	{
+		std::cout << "fj_lin " << "\n" << fj_lin << "\n" << "fj_non  " << "\n" << fj_and_hj_non << "\n";
+		throw ExceptionError("fs are not same in linear and nonlinear cases!");
+	}
+	///////////******Step by step comparison*******//////////
+	auto tmpResult_lin/*[Uinv_Lin, FixedMatrix_lin]*/ = solverTest_lin.calculateKernal(FixedData_lin, problem.Label, (int)problem.neighborIndexes.size(), problem.EtaTest);
+	auto tmpResult_non /*[ FixedMatrix_non, KernlTXj,KernlXjXj, kernelTXj_kernelTildaTXj] */= solverTest_non.calcGramMat(problem.Data, problem.Label, problem.consensusT, problem.kerneltype, (int)problem.neighborIndexes.size(), problem.EtaTest, problem.gamma);
+	auto Uinv_Lin=std::get<0>(tmpResult_lin);
+	auto FixedMatrix_lin=std::get<1>(tmpResult_lin);
+	auto FixedMatrix_non=std::get<0>(tmpResult_non);
+	auto UinvKernlTXj=std::get<1>(tmpResult_non);
+	//auto KernlXjXj=std::get<2>(tmpResult_non);
+	auto kernelTXj_kernelTildaTXj =std::get<3>(tmpResult_non);
+	//auto &Uinv_non = solverTest_non.mUTildainv;
+	//if ((Uinv_Lin.block(0, 0, Uinv_Lin.rows() - 1, Uinv_Lin.cols() - 1)) != Uinv_non)
+	//{
+	//	throw ExceptionError("The inverse of matrix U is not same in linear and nonlinear cases!");
+	//}
+	if (!(FixedMatrix_lin.isApprox(FixedMatrix_non)))
+	{
+		throw ExceptionError("The Gram matrix is not same in linear and nonlinear cases!");
+	}
+	//Multipliers Lambda_for_test = Multipliers::Ones(problem.NoDataPoints)*0.1;
+	auto tmpTest_lin/*[PartOneObj_lin, Part2Obj_lin, Part3Obj_lin, AllPartObj_lin]*/ = solverTest_lin.ObejctiveFunc(FixedMatrix_lin, solverTest_lin.mfj, lambda_lin, problem.Label, FixedData_lin, Uinv_Lin, problem.NoDataPoints, problem.EtaTest, (NeighCount)problem.neighborIndexes.size());
+	auto tmpTest_non /*[PartOneObj_non, Part2Obj_non, Part3Obj_non, AllPartObj_non] */= solverTest_non.ObejctiveFunc(FixedMatrix_non, solverTest_non.mfTilde, solverTest_non.mhj, lambda_non, problem.Label, problem.L_test, solverTest_non.mkernelTXj_mkernelTildaTXj, problem.NoDataPoints, problem.EtaTest, (NeighCount)problem.neighborIndexes.size());
+	auto PartOneObj_lin=std::get<0>(tmpTest_lin);
+	auto Part2Obj_lin=std::get<1>(tmpTest_lin);
+	auto Part3Obj_lin=std::get<2>(tmpTest_lin);
+	auto AllPartObj_lin=std::get<3>(tmpTest_lin);
+	auto PartOneObj_non=std::get<0>(tmpTest_non);
+	auto Part2Obj_non=std::get<1>(tmpTest_non);
+	auto Part3Obj_non=std::get<2>(tmpTest_non);
+	auto AllPartObj_non=std::get<3>(tmpTest_non);
+		
+	if (!UinvKernlTXj.isApprox(solverTest_non.mXj.transpose()))
+	{
+		std::cout << "Xj_tranpose : " << solverTest_non.mXj.transpose() << " is not same as KTXj : " << UinvKernlTXj << "\n";
+		throw ExceptionError("Xj_tranpose is not same as kTXj");
+	}
+	auto obj1 = Uinv_Lin.block(0, 0, Uinv_Lin.rows() - 1, Uinv_Lin.cols() - 1) *problem.Data.transpose();
+	auto obj11 = (1 / (1 + 2 * problem.EtaTest*(NeighCount)problem.neighborIndexes.size()))*solverTest_non.mUinvKrnTXj;
+	if (!obj1.isApprox(obj11))
+	{
+		std::cout << "Uinv : " << obj1 << " is not same as (1/1+2nB)*KTXj : " << UinvKernlTXj << "\n";
+		throw ExceptionError("Uinv is not same as (1/1+2nB)*kTXj");
+	}
+	if (!obj1.isApprox(kernelTXj_kernelTildaTXj))
+	{
+		std::cout << "Uinv : " << "\n" << obj1 << " is not same as kernelTXj_kernelTildaTXj : " << "\n" << kernelTXj_kernelTildaTXj << "\n";
+		throw ExceptionError("Uinv is not same as kernelTXj_kernelTildaTXj");
+	}
+	if (!obj11.isApprox(kernelTXj_kernelTildaTXj))
+	{
+		std::cout << "(1/1+2nB)*kTXj : " << obj11 << " is not same as kernelTXj_kernelTildaTXj : " << kernelTXj_kernelTildaTXj << "\n";
+		throw ExceptionError("(1/1+2nB)*kTXj is not same as kernelTXj_kernelTildaTXj");
+	}
+	auto& Uinfj = Uinv_Lin.block(0, 0, Uinv_Lin.rows() - 1, Uinv_Lin.cols() - 1)*solverTest_lin.mfj.head(problem.p_test - 1);
+	auto& kTT_kTT_fTilde = solverTest_non.mkernelTT_mkernelTildaTT* solverTest_non.mfTilde;
+
+	if (!Uinfj.isApprox(kTT_kTT_fTilde))
+	{
+		std::cout << "Uinfj : " << Uinfj.transpose() << " is not same as (kTT-ktildeTT)fTilde : " << kTT_kTT_fTilde.transpose() << "\n";
+		throw ExceptionError("Uinfj is not same as (kTT-ktildeTT)fTilde");
+	}
+
+
+	if (std::abs(PartOneObj_lin - PartOneObj_non) > epsilon)
+	{
+		std::cout << "The first part of objective function in linear: " << PartOneObj_lin << " is not same as nonlinear: " << PartOneObj_non << " !" << "\n";
+		throw ExceptionError("The first part of objective functions are not same in linear and nonlinear cases!");
+	}
+
+	if (std::abs(Part2Obj_lin - Part2Obj_non) > epsilon)
+	{
+		std::cout << "The second part of objective function in linear: " << Part2Obj_lin << " is not same as in nonlinear: " << Part2Obj_non << " !" << "\n";
+		throw ExceptionError("The second part of objective functions are not same in linear and nonlinear cases!");
+	}
+	if (std::abs(Part3Obj_lin - Part3Obj_non) > epsilon)
+	{
+		std::cout << "The third part of objective function in linear: " << Part3Obj_lin << " is not same as in nonlinear : " << Part3Obj_non << " !" << "\n";
+		throw ExceptionError("The third part of objective functions are not same in linear and nonlinear cases!");
+	}
+	if (std::abs(AllPartObj_lin - AllPartObj_non) > epsilon)
+	{
+		std::cout << "The objective function in linear: " << AllPartObj_lin << "is not same as nonlinear: " << AllPartObj_non << " !" << "\n";
+		throw ExceptionError("The objective functions are not same in linear and nonlinear cases!");
+	}
+
+	/* Testing Vj, wj, bj if they are the same befer calculations*/
+	wj_bj_test << wj, bj;
+
+	if ((Vj_test - wj_bj_test).norm()/ Vj_test.norm() > epsilon)
+	{
+		std::cout << "Vj_test : " << Vj_test.transpose() << " is not same as wj and bj nonlinear : " << wj_bj_test.transpose() << "\n";
+		throw ExceptionError("Vj is not same as wj added with bj ! ");
+	}
+
+	solverTest_lin.compute_lambda_v((NeighCount)problem.neighborIndexes.size(), avarage_vi);
+	lambda_lin = solverTest_lin.getLambdaj_lin();
+	auto fj = solverTest_lin.mfj;
+	solverTest_non.compute_lambda_w_b((NeighCount)problem.neighborIndexes.size(), problem.average_bi, problem.average_wi,-1);
+	lambda_non = solverTest_non.getLambdaj();
+	HyperPlaneScalars fTilde(fj.size());
+	fTilde << solverTest_non.mfTilde, solverTest_non.mhj;
+	Vj_test = solverTest_lin.getV_lin();
+	wj = solverTest_non.getWTilde();
+	bj = solverTest_non.getbj();
+	wj_bj_test << wj, bj;
+
+
+	if ((lambda_lin - lambda_non).norm()/lambda_lin.norm() > epsilon)
+	{
+		cout << "lambda linear is not same as lambda nonlinear" << "\n";
+		std::cout << "lambda linear : " << " \n " << lambda_lin << " \n ";
+		std::cout << "lambda non-linear : " << " \n " << lambda_non << "\n";
+		throw ExceptionError("lambda linear is not same as lambda nonlinear");
+	}
+	if ((Vj_test - wj_bj_test).norm()/Vj_test.norm() > epsilon)
+	{
+		std::cout << "Vj_test : " << " \n " << Vj_test << " \n " << " is not same as wj and bj nonlinear : " << " \n " << wj_bj_test << "\n";
+		throw ExceptionError("Vj is not same as wj added with bj ! ");
+	}
+	if ((Vj_test - Vj_result).norm()/Vj_test.norm() > epsilon)
+	{
+		std::cout << "Vj_test : " << " \n " << Vj_test << " \n ";
+		std::cout << "Vj_result : " << " \n " << Vj_result << " \n ";
+		throw ExceptionError("The optiomization result is not correct!!");
+	}
+	if ((wj_bj_test - wj_bj_result).norm()/wj_bj_test.norm() > epsilon) {
+		std::cout << "wj_bj_test : " << " \n " << wj_bj_test << " \n ";
+		std::cout << "wj_bj_result : " << " \n " << wj_bj_result << " \n ";
+		throw ExceptionError("The optiomization result is not correct!!");
+
+	}
+	if ((Vj_result - wj_bj_result).norm() / wj_bj_test.norm() > epsilon) {
+		std::cout << "wj_bj_result : " << " \n " << wj_bj_result << " \n ";
+		std::cout << "Vj_result : " << " \n " << Vj_result << " \n ";
+		throw ExceptionError("The optiomization result is not correct!!");
+	}
+	if ((fj - fTilde).norm()/fj.norm() > epsilon)
+	{
+		cout << "fj and fTilde are not the same " << "\n";
+		std::cout << "lambda linear : " << " \n " << fj << " \n ";
+		std::cout << "lambda non-linear : " << " \n " << fTilde << "\n";
+		throw ExceptionError("lambda linear is not same as lambda nonlinear");
+	}
+
+	auto alpha_lin = solverTest_lin.getAlphaj_lin();
+	auto alpha_non = solverTest_non.getAlphaj();
+	auto beta_non = solverTest_non.getBeta();
+	auto alpha_beta_non = alpha_non;
+	alpha_beta_non.conservativeResize((int)alpha_lin.size(), Eigen::NoChange);
+	alpha_beta_non << alpha_non, beta_non;
+	if ((alpha_lin - alpha_beta_non).norm()/alpha_lin.norm() > epsilon)
+	{
+		std::cout << "Alpha linear : " << alpha_lin.transpose() << "  is not the same as alpha and beta for nonlinear : " << alpha_beta_non.transpose() << "\n";
+		throw ExceptionError("Alpha linear is not same as alpha and beta for nonlinear ! ");
+	}
+
+	std::cout << "++++++++++Comparing Linear and Non-linear is passed for " << problem.name <<  "!!++++++++++" << "\n";
+	return true;
+}
+
+bool compareCodewithActualResults(const TestProblem& problem)
+{
+	double epsilon = 1e-10;// std::numeric_limits<double>::epsilon() * 1e+10;
+
+	const bool Linear_test = true;
+	nodesolver solverTest_non(problem.initLambda, problem.initWj, problem.init_bj, problem.Data, problem.Label, problem.consensusT, problem.kerneltype, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest, problem.gamma);
+
+	/* Test for checking lambdas*/
+	Multipliers lambda_non = solverTest_non.getLambdaj();
+	solverTest_non.compute_lambda_w_b((NeighCount)problem.neighborIndexes.size(), problem.average_bi, problem.average_wi,-1);
+	lambda_non = solverTest_non.getLambdaj();
+	WeighVector wj(problem.L_test);
+	wj = solverTest_non.getWTilde();
+	Bias bj= solverTest_non.getbj();
+
+	/*Check for the sizes*/
+	if ((int)wj.size() != problem.L_test || lambda_non.size() != problem.Data.rows())
+	{
+		throw ExceptionError("The size of problem for Ws are not correct");
+	}
+
+	for (int i = 0; i < (int)lambda_non.size(); i++) {
+		if (lambda_non[i] <0 || lambda_non[i] > problem.JC_test)
+		{
+			std::cout << "lambda non-linear is : " << " \n " << lambda_non << "\n";
+			throw ExceptionError("lambda is out of range!!!");
+		}
+	}
+
+	if ((wj - problem.wj_result).norm()/ wj.norm() > epsilon) {
+		std::cout << "wj test : " << " \n " << wj << " \n ";
+		std::cout << "wj result : " << " \n " << problem.wj_result << " \n ";
+		throw ExceptionError("The optiomization result (wj) is not correct!!");
+
+	}
+	if ((problem.bj_result - bj) > epsilon) {
+		std::cout << "problem.bj_result : " << " \n " << problem.bj_result << " \n ";
+		std::cout << "problem.bj_test : " << " \n " << bj << " \n ";
+		throw ExceptionError("The optiomization result (bj) is not correct!!");
+	}
+
+	std::cout << "++++++++++Comparing SVM with Actual results is passed for " << problem.name << "!!++++++++++" << "\n";
+	return true;
+}
+
+bool testOfLambda(const TestProblem& problem)
+{
+	nodesolver solverTest_non(problem.initLambda, problem.initWj, problem.init_bj, problem.Data, problem.Label, problem.consensusT, problem.kerneltype, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest, problem.gamma);
+	FuncVariables FuncData(solverTest_non.mFixedMatrix, solverTest_non.mkernelTXj_mkernelTildaTXj, problem.Label, solverTest_non.mfTilde, solverTest_non.mhj, (int)problem.neighborIndexes[0].size(), problem.EtaTest,-1,0);
+	std::vector<double> grad((int)problem.Data.rows());
+	Multipliers Lambda((int)problem.Data.rows());
+	grad = {};
+	double eps = 0.1;
+	int Rank = -1;
+	auto ans = SolverFunc(myfunc, FuncData,problem.JC_test, (int) problem.Data.rows() );
+	auto&& x = std::get<0>(ans);
+	auto Func = myfunc(x, grad, &FuncData);
+
+	for (int i = 0; i < problem.initLambda.size(); i++) {
+		auto tmpStore = x[i];
+		x[i] += eps;
+		auto FuncP = Func;
+		if (x[i] <= problem.JC_test)
+			FuncP = myfunc(x, grad, &FuncData);
+
+		x[i] = tmpStore - eps;
+		double FuncM = Func;
+		if(x[i]>=0)
+			FuncM = myfunc(x, grad, &FuncData);
+
+		x[i] = tmpStore;
+		if (FuncM < Func ) {
+			cout << "f(x-[ " << i << " ]) is less than f(x)" << "\n";
+			throw ExceptionError("f(x-) is less than f(x)");
+		}
+		if (FuncP < Func)
+		{
+			cout << "f(x+[ " << i << " ]) is less than f(x)" << "\n";
+			throw ExceptionError("f(x+) is less than f(x)");
+		}
+	}
+	cout << "The found lambda gives the optimum value for " << problem.name << "!!"<< "\n";
+	return true;
+}
+//bool testOfLambdaWithUpdates(const TestProblem& problem)
+//{
+//	testOfLambda(TestProblem& problem);
+//
+//	return true;
+//}
+bool BroadcastingTest(const TestProblem& problem) {
+	//auto node1 = std::make_pair<std::unique_ptr<nodesolver>, NodeData>(std::make_unique<nodesolver>( std::vector<int>{ 2 } ), { 2,5,2 });
+	//auto node2 = std::make_pair<std::unique_ptr<nodesolver>, NodeData>(std::make_unique<nodesolver>(std::vector<int>{ 2 }), { 2,5,2 });
+	//auto node3 = std::make_pair<std::unique_ptr<nodesolver>, NodeData>(std::make_unique<nodesolver>(std::vector<int>{ 0,1 }), { 2,5,2 });
+	//WeighVector w1 = WeighVector::Ones(2);
+	//node1.first->wTildaj =w1;
+	//node1.first->mbj = 1;
+	//WeightsAndBias Vj1 = WeightsAndBias((int)w1.size()+1);
+	//Vj1 << node1.first->wTildaj, node1.first->mbj;
+
+	//node2.first->wTildaj = w1 * 2;
+	//node2.first->mbj = 2;
+	//WeightsAndBias Vj2 = WeightsAndBias((int)w1.size() + 1);
+	//Vj2 << node2.first->wTildaj, node2.first->mbj;
+
+	//node3.first->wTildaj = w1 * 3;
+	//node3.first->mbj = 3;
+	//WeightsAndBias Vj3 = WeightsAndBias((int)w1.size() + 1);
+	//Vj3<< node3.first->wTildaj, node3.first->mbj;
+
+	//std::vector<std::pair<std::unique_ptr<nodesolver>, NodeData>> Neighbo{ std::move(node1),std::move(node2),std::move(node3) };
+	//Broadcast_wj_bj(Neighbo[1], Neighbo);
+	//Broadcast_wj_bj(Neighbo[2], Neighbo);
+	//Broadcast_wj_bj(Neighbo[3], Neighbo);
+
+	//if (Neighbo[1].second.Vi != Vj3) {
+	//	cout << "Vi for node1" << "\n" << Neighbo[1].second.Vi << "\n";
+	//	cout << "Vj for node3" << "\n" << Vj3 << "\n";
+	//	throw ExceptionError("The neighboring value is wrong!");
+	//}
+	//else if (Neighbo[2].second.Vi != Vj3) {
+	//	cout << "Vi for node2" << "\n" << Neighbo[2].second.Vi << "\n";
+	//	cout << "Vj for node3" << "\n" << Vj3 << "\n";
+	//	throw ExceptionError("The neighboring value is wrong!");
+	//}
+	//else if (Neighbo[3].second.Vi != (Vj1 + Vj2)/2) {
+	//	cout << "Vi for node3" << "\n" << Neighbo[3].second.Vi << "\n";
+	//	cout << "Vj for node1 & node2" << "\n" << (Vj1 + Vj2) / 2 << "\n";
+	//	throw ExceptionError("The neighboring value is wrong!");
+	//}
+
+	/* New broadcasting test*/
+	nodesolver solverTest_non(problem.initLambda, problem.initWj, problem.init_bj, problem.Data, problem.Label, problem.consensusT, problem.kerneltype, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest, problem.gamma);
+	auto partRes = Partitioning(problem.Data, problem.Label, problem.nrNodes, false, problem.graph);
+	auto neighborsVectors = Network(problem.graph, problem.nrNodes, problem.graphFile, true);
+	std::vector<std::pair<std::unique_ptr<nodesolver>, NodeData>> AllNodesInfo(problem.nrNodes);
+	for (int i = 0; i < problem.nrNodes; i++) {
+		auto& partMat = get<0>(partRes[i]);
+		auto& partLab = get<1>(partRes[i]);
+		auto& neighbors = neighborsVectors[i];
+		auto& initialLambda = Multipliers::Ones(partMat.rows()) * 5.0;
+		auto& initialWj = WeighVector::Ones(problem.consensusT.rows()) * 5.0;
+		Bias initial_bj = 5.0;
+		AllNodesInfo[i].first = std::make_unique<nodesolver>(initialLambda, initialWj, initial_bj, partMat, partLab, problem.consensusT, problem.kerneltype, neighbors, problem.JC_test,problem.EtaTest,problem.gamma);
+		AllNodesInfo[i].second = NodeData(problem.L_test, (int)partMat.rows(), (int)partMat.cols());
+
+	}
+	//auto& neigh = Network(Graph::cycle, problem.nrNodes);
+	Eigen::VectorXd w0(4), w1(4), w2(4), w3(4);
+	w0 << 1, 2, 3, 4;
+	w1 << 5, 6, 7, 8;
+	w2 << 9, 10, 11, 12;
+	w3 << 13, 14, 15, 16;
+	AllNodesInfo[0].first->setWTilde(w0);
+	AllNodesInfo[1].first->setWTilde(w1);
+	AllNodesInfo[2].first->setWTilde(w2);
+	AllNodesInfo[3].first->setWTilde(w3);
+
+	//int n = 0;
+	for (auto& Node : AllNodesInfo) {
+		//cout << "node " << n << "\n";
+		Broadcast_wj_bj(Node, AllNodesInfo);
+		//cout << "Wi[" << n << "] : " << "\n" << Node.second.Wi << "\n";
+		//n =1+ n;
+	}
+	Eigen::VectorXd Wi0(4), Wi1(4), Wi2(4), Wi3(4);
+	Wi0 << 9, 10, 11, 12;
+	Wi1 << 5, 6, 7, 8;
+	Wi2 = Wi0;
+	Wi3 = Wi1;
+	if (AllNodesInfo[0].second.Wi !=Wi0 ) {
+		cout << "AllNodesInfo[0].second.Wi" << "\n" << AllNodesInfo[0].second.Wi << "\n" << "Wi0" << "\n" << Wi0 << "\n";
+		throw ExceptionError("The Wi[0] is wrong!!");
+	}
+	else if (AllNodesInfo[1].second.Wi != Wi1) {
+		cout << "AllNodesInfo[0].second.Wi" << "\n" << AllNodesInfo[1].second.Wi << "\n" << "Wi1" << "\n" << Wi1 << "\n";
+		throw ExceptionError("The Wi[1] is wrong!!");
+	}
+	else if (AllNodesInfo[2].second.Wi != Wi2) {
+		cout << "AllNodesInfo[0].second.Wi" << "\n" << AllNodesInfo[2].second.Wi << "\n" << "Wi2" << "\n" << Wi2 << "\n";
+		throw ExceptionError("The Wi[2] is wrong!!");
+	}
+	else if (AllNodesInfo[3].second.Wi != Wi3) {
+		cout << "AllNodesInfo[0].second.Wi" << "\n" << AllNodesInfo[3].second.Wi << "\n" << "Wi3" << "\n" << Wi3 << "\n";
+		throw ExceptionError("The Wi[3] is wrong!!");
+	}
+	cout << "++++++++++Broadcasting test is passed !!!++++++++++" << "\n";
+
+	return true;
+}
+
+bool testOfGradient(const TestProblem& problem)
+{
+	nodesolver solverTest_non(problem.initLambda, problem.initWj, problem.init_bj, problem.Data, problem.Label, problem.consensusT, problem.kerneltype, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest, problem.gamma);
+	if (problem.consensusT.rows() == 0) {
+		cout << "The number of rows of T is " << problem.consensusT.rows() << "\n";
+		throw ExceptionError("The number of rows of T is zero!");
+	}
+	FuncVariables FuncData(solverTest_non.mFixedMatrix, solverTest_non.mkernelTXj_mkernelTildaTXj, problem.Label, solverTest_non.mfTilde, solverTest_non.mhj, (int)problem.neighborIndexes[0].size(), problem.EtaTest,-1,0);
+	Row rowSize = (int)problem.Data.rows();
+	std::vector<double> grad(rowSize,0.0);
+	Eigen::VectorXd gradAnalytic= Eigen::VectorXd::Ones(rowSize)*1000;
+	double eps = 1e-6;
+
+	std::vector<double> x(rowSize, 10);
+	/*auto Func =*/ myfunc(x, grad, &FuncData);
+	for (int i = 0; i < rowSize; i++) {
+		gradAnalytic[i] = grad[i];
+	}
+	Eigen::VectorXd gradNumeric = Eigen::VectorXd::Zero(rowSize);
+	for (int i = 0; i < rowSize; i++) {
+		auto tmpStore = x[i];
+		x[i] += eps;
+		double FuncP = myfunc(x, grad, &FuncData);
+
+		x[i] = tmpStore - eps;
+		double FuncM = myfunc(x, grad, &FuncData);
+
+		gradNumeric[i] = (FuncP - FuncM) / (2 * eps);
+		//cout << "gradNumeric[ " << i << " ] : " << gradNumeric[i] << " != " << gradAnalytic[i] << " : gradAnalytic[ " << i << " ] " << "\n";
+		x[i] = tmpStore;
+		if (std::abs(gradNumeric[i]- gradAnalytic[i])/std::abs(gradAnalytic[i]) > eps*10) {
+			cout << "gradNumeric[ " << i << " ] : " << gradNumeric[i] << " != " << gradAnalytic[i] << " : gradAnalytic[ "<< i << " ] " <<   "\n";
+			throw ExceptionError("gradNumeric is not the same as gradAnalytic");
+		}
+	}
+
+	cout << "++++++++++The Gradient test is passed for " << problem.name << "!!++++++++++" << std::endl;
+	return true;
+}
+
+//bool TestCrossValidation1() {
+//
+//	std::string Dataset = ReadDataSetFile();
+//	Dataset.append("simpleLinear2.dat");
+//
+//	fs::path filePath = fs::u8path(Dataset);
+//	//const auto prob = FileReader(filePath);
+//
+//	//std::string Dataset = "..//..//Datasets//simpleLinear2.dat";
+//	//fs::path filePath = fs::u8path(Dataset);
+//	const auto prob = FileReader(filePath);
+//	int NoFold = 3;
+//	bool RandomOn = false;
+//	std::string GraphFile = "Regular";
+//	int NumberofNodes = 1;
+//	TypeForDesign Ttype = TypeForDesign::identity;
+//	TypeForKernel kernelTyp = TypeForKernel::linear;
+//	ReducedDim L = 2;
+//	double EtaStart = 0.1;
+//	double gamma = 0.25;
+//	DimReductionMat T = ConsensusT(L, prob.Data, Ttype, EtaStart);
+//
+//	Row TrnRow = 8;
+//	Column TrnLab = 2;
+//	Row TstRow = 4;
+//	DataMatrix TrnM1(TrnRow, TrnLab), TrnM2(TrnRow, TrnLab), TrnM3(TrnRow, TrnLab), TstM1(TstRow, TrnLab), TstM2(TstRow, TrnLab), TstM3(TstRow, TrnLab);
+//	LabelVector TrnLab1(TrnRow), TrnLab2(TrnRow), TrnLab3(TrnRow), TstLab1(TstRow), TstLab2(TstRow), TstLab3(TstRow);
+//	TrnM1 = prob.Data.block(4, 0, 8, 2);
+//	TrnLab1 = prob.lables.block(4, 0, 8, 1);
+//	TrnM2 << prob.Data.block(0, 0, 4, 2),
+//		prob.Data.block(8,0,4,2);
+//	TrnLab2 << prob.lables.block(0, 0, 4, 1),
+//		prob.lables.block(8, 0, 4, 1);
+//	TrnM3 = prob.Data.block(0, 0, 8, 2);
+//	TrnLab3= prob.lables.block(0, 0, 8, 1);
+//
+//	TstM1= prob.Data.block(0,0,4,2);
+//	TstLab1= prob.lables.block(0, 0, 4, 1);
+//	TstM2= prob.Data.block(4, 0, 4, 2);
+//	TstLab2= prob.lables.block(4, 0, 4, 1);
+//	TstM3= prob.Data.block(8, 0, 4, 2);
+//	TstLab3= prob.lables.block(8, 0, 4, 1);
+//	//DataMatrix Test;
+//	//CrossValIntrval interval=std::make_tuple(1e-2, 1000, 1e-3, 1e+5, 1, 1e+10);
+//	CrossValIntrval interval = std::make_tuple(1e-2, 1e-1, 1e-3, 1e-2, 1, 10);
+//	std::string iName;
+//	iName = "HitRateMatrices_for_testing";
+//	bool ADMMPar = false, mpi_flag=false;
+//	int worldRank = -1, worldSize = -1;
+//	double iEpsilonVal = 1e-3, iABSTOL=1e-4, iRELTOL=1e-2;
+//	std::string TerminationCriteria = "AllThree";
+//	auto CrossResult /*[JC, Gamma,Eta, PartData, hitRate]*/ = Cross_validation(NoFold, prob.Data, prob.lables, T, kernelTyp, NumberofNodes, RandomOn, EtaStart, gamma, iName, interval,Graph::hardCoded, ADMMPar, GraphFile, worldSize, worldRank , mpi_flag, iEpsilonVal, iABSTOL, iRELTOL, TerminationCriteria);
+//	auto JC=std::get<0>(CrossResult );
+//	auto Gamma=std::get<1>(CrossResult );
+//	auto Eta=std::get<2>(CrossResult );
+//	auto PartData=std::get<3>(CrossResult );
+//	auto hitRate=std::get<4>(CrossResult );
+//	if (!TstM1.isApprox(std::get<0>(PartData[0])) || !TstM2.isApprox(std::get<0>(PartData[1])) || !TstM3.isApprox(std::get<0>(PartData[2]))) {
+//		cout << "The testing set is wrong!" << "\n";
+//		throw ExceptionError("The testing set is wrong!");
+//	}
+//	if (!TstLab1.isApprox(std::get<1>(PartData[0])) || !TstLab2.isApprox(std::get<1>(PartData[1]))|| !TstLab3.isApprox(std::get<1>(PartData[2]))) {
+//		cout << "The testing label is wrong!" << "\n";
+//		throw ExceptionError("The testing label set is wrong!");
+//	}
+//	if (!TrnM1.isApprox(std::get<2>(PartData[0])) || !TrnM2.isApprox(std::get<2>(PartData[1])) || !TrnM3.isApprox(std::get<2>(PartData[2]))) {
+//		cout << "The training set is wrong!" << "\n";
+//		throw ExceptionError("The training set is wrong!");
+//	}
+//	if (!TrnLab1.isApprox(std::get<3>(PartData[0])) || !TrnLab2.isApprox(std::get<3>(PartData[1])) || !TrnLab3.isApprox(std::get<3>(PartData[2]))) {
+//		cout << "The training label is wrong!" << "\n";
+//		throw ExceptionError("The training label set is wrong!");
+//	}
+//	if (hitRate==-1) {
+//		cout << "The cross-validation could not find the best parameters!!";
+//		throw ExceptionError("The cross-validation could not find the best parameters!!");
+//	}
+//	std::cout << "Best JC: " << JC << "\n" << "Best Gamma: " << Gamma << "\n" << "Best Eta: " << Eta << "\n" << "Best hitRate: " << hitRate << "\n" ;
+//	cout << "++++++++++Cross-Validation test is passed!!++++++++++";
+//	return true;
+//}
+bool TestCrossValidation2(int NumberOfFolds) {
+	int row = 15;
+	int col = 3;
+	DataMatrix InMat(row, col);
+	LabelVector InLabel(row);
+	for (int o = 0; o < row; o++) {
+		InLabel(o) = o;
+		for (int k = 0; k < col; k++) {
+			InMat(o, k) = o;
+		}
+	}
+	auto DividedData = Partitioning(InMat, InLabel, NumberOfFolds, false, Graph::cycle);
+	 TestTrainData fold = FoldData(NumberOfFolds, InMat, InLabel, false);
+
+	 std::vector<int> tmpCount(NumberOfFolds),tmpReserve(NumberOfFolds);
+
+	 for (int foldCount = 0; foldCount < NumberOfFolds; foldCount++) { tmpCount[foldCount] = foldCount; }
+	 tmpReserve = tmpCount;
+
+		 for (int i = 0; i < NumberOfFolds; i++) {
+			 int block = 0;
+			 std::cout << "----------Fold " << i << "------------" << "\n";
+			 auto TestRow = (std::get<0>(fold[i])).rows();
+			 if (!(std::get<0>(fold[i])).isApprox(std::get<0>(DividedData[i]) /*InMat.block(block, 0, TestRow, col)*/)) {
+				 std::cout << "Test Data" << "\n" << std::get<0>(fold[i]) << "\n";
+				 std::cout << "Real Test Data" << "\n" << std::get<0>(DividedData[i]) << "\n";
+				 throw ExceptionError("Wrong TestMatrix in Cross-Val!!!");
+			 }
+			 else if (!(std::get<1>(fold[i])).isApprox(std::get<1>(DividedData[i])/*InLabel.block(block, 0, TestRow, 1)*/)) {
+				 std::cout << "Test label" << "\n" << std::get<1>(fold[i]) << "\n";
+				 std::cout << "Real Test label" << "\n" << std::get<1>(DividedData[i]) << "\n";
+				 throw ExceptionError("Wrong Testlabel in Cross-Val!!!");
+			 }
+			 tmpCount.erase(tmpCount.begin()+i);
+			 DataMatrix trnData(0, col);
+			 LabelVector trnLab(0);
+
+			 for (auto& iTmp: tmpCount) {
+				 Row row = (Row)std::get<0>(DividedData[iTmp]).rows();
+				 trnData.conservativeResize(trnData.rows() + row, Eigen::NoChange);
+				 trnData.block(block, 0, row, col) = std::get<0>(DividedData[iTmp]);
+				 trnLab.conservativeResize(trnLab.size() + row);
+				 trnLab.tail(row) = std::get<1>(DividedData[iTmp]);
+				 block = block + row; 
+			 }
+			 if (!(std::get<2>(fold[i])).isApprox(trnData)) {
+				 std::cout << "Train Data" << "\n" << std::get<2>(fold[i]) << "\n";
+				 std::cout << "Real Train Data" << "\n" << trnData << "\n";
+				 throw ExceptionError("Wrong TrainMatrix in Cross-Val!!!");
+			 }
+			 else if (!(std::get<3>(fold[i])).isApprox(trnLab)) {
+				 std::cout << "Test label" << "\n" << std::get<3>(fold[i]) << "\n";
+				 std::cout << "Real Test label" << "\n" << trnLab << "\n";
+				 throw ExceptionError("Wrong Trainlabel in Cross-Val!!!");
+			 }
+			 tmpCount=tmpReserve;
+
+		 }
+
+	std::cout << "The CrossValidaion test is passed!!! "<< "\n";
+	 return true;
+}
+Eigen::MatrixXd K_Tilda_Test(const Eigen::MatrixXd& iUTildainv, const Eigen::MatrixXd& a, const Eigen::MatrixXd& b, const Eigen::MatrixXd& iT, const int Bj, const double iEta, TypeForKernel iKerneltype, double iGamma) {
+	return 2.0*iEta*(Bj)*K(a, iT, iKerneltype, iGamma)*iUTildainv*K(iT, b, iKerneltype, iGamma);
+}
+bool TestOfInverseMat(const TestProblem& problem) {
+	double epsilon = 1e-10;
+	nodesolver solverTest_non(problem.initLambda, problem.initWj, problem.init_bj, problem.Data, problem.Label, problem.consensusT, problem.kerneltype, problem.neighborIndexes[0], problem.JC_test, problem.EtaTest, problem.gamma);
+	if (problem.initLambda==Eigen::VectorXd::Zero(problem.initLambda.size())) {
+		throw ExceptionError("The lambda is zero!!!");
+	}
+	LabelVector tmp1((int)solverTest_non.mfTilde.size());
+		tmp1 = solverTest_non.calc_c(problem.initLambda, solverTest_non.mfTilde);
+
+		auto& mUTilda= Eigen::MatrixXd::Identity(problem.consensusT.rows(), problem.consensusT.rows()) + 2.0*problem.EtaTest*problem.neighborIndexes.size()* K(problem.consensusT, problem.consensusT, problem.kerneltype, problem.gamma);
+	auto tmpInverse = InversMat(mUTilda);
+	Eigen::VectorXd tmp2 = 2.0*problem.EtaTest*problem.neighborIndexes.size()*(solverTest_non.mUinvKrnlTT*solverTest_non.mfTilde - solverTest_non.mUinvKrnTXj*solverTest_non.Yj.cwiseProduct(problem.initLambda)) - solverTest_non.mfTilde;
+	if ((tmp1- tmp2).norm()/tmp2.norm() > epsilon) {
+		cout << "tmp1" << "\n" << tmp1 << "\n";
+		cout << "tmp2" << "\n" << tmp2 << "\n";
+		throw ExceptionError("Wrong inverse calculations!!");
+	}
+
+	KrnlTildeMatrx B = KrnlTildeMatrx::Ones(5, (int)problem.consensusT.cols())*6.0;
+	KrnlTildeMatrx A = KrnlTildeMatrx::Ones(5, (int)problem.consensusT.cols())*5.0;
+
+	KrnlTildeMatrx tmp3 = KrnlTildeMatrx((int)A.rows(), (int)B.rows());
+	KrnlTildeMatrx tmp4 = KrnlTildeMatrx((int)A.rows(), (int)B.rows());
+	tmp3 = K_Tilda(A, B, problem.consensusT, mUTilda.householderQr(),(int) problem.neighborIndexes.size(), problem.EtaTest, problem.kerneltype, problem.gamma);
+	auto INV = InversMat(mUTilda);
+	tmp4 = K_Tilda_Test(INV, A, B, problem.consensusT, (int)problem.neighborIndexes.size(), problem.EtaTest, problem.kerneltype,problem.gamma);
+	if (!tmp3.isApprox(tmp4)) {
+		cout << "tmp3" << "\n" << tmp3<< "\n";
+		cout << "tmp4" << "\n" << tmp4 << "\n";
+		throw ExceptionError("Wrong inverse calculations!!");
+	}
+	KrnlTildeMatrx tmp5((int)problem.consensusT.rows(), (int)problem.Data.rows());
+	tmp5= solverTest_non.mkernelTXj_mkernelTildaTXj;
+	KrnlTildeMatrx tmp6((int)problem.consensusT.rows(), (int)problem.Data.rows()); 
+	tmp6= K(problem.consensusT, problem.Data, problem.kerneltype, problem.gamma)- K_Tilda_Test(INV,problem.consensusT, problem.Data, problem.consensusT, (int)problem.neighborIndexes.size(), problem.EtaTest, problem.kerneltype, problem.gamma);
+	if (!tmp5.isApprox(tmp6)) {
+		cout << "tmp5" << "\n" << tmp5 << "\n";
+		cout << "tmp6" << "\n" << tmp6 << "\n";
+		throw ExceptionError("Wrong inverse calculations!!");
+	}
+
+	KrnlTildeMatrx tmp_fixed((int) problem.Data.rows(), (int)problem.Data.rows());
+	tmp_fixed = solverTest_non.mFixedMatrix;
+	KrnlTildeMatrx tmp_fixed_Test((int)problem.Data.rows(), (int)problem.Data.rows());
+	tmp_fixed_Test= K(problem.Data, problem.Data, problem.kerneltype, problem.gamma) - K_Tilda_Test(INV,problem.Data, problem.Data, problem.consensusT,  (int)problem.neighborIndexes.size(), problem.EtaTest, problem.kerneltype, problem.gamma) + Eigen::MatrixXd::Constant((int)problem.Data.rows(), (int)problem.Data.rows(), 1.0 / (2.0 * problem.EtaTest*problem.neighborIndexes.size()));
+	for (int i = 0; i < problem.Label.size(); i++)
+	{
+		tmp_fixed_Test.row(i) = tmp_fixed_Test.row(i)*problem.Label(i);
+	}
+	for (int i = 0; i < problem.Label.size(); i++)
+	{
+		tmp_fixed_Test.col(i) = tmp_fixed_Test.col(i)*problem.Label(i);
+	}
+
+	if (!tmp_fixed.isApprox(tmp_fixed_Test))
+	{
+		cout << "tmp_fixed" << "\n" << tmp_fixed << "\n";
+		cout << "tmp_fixed_Test" << "\n" << tmp_fixed_Test << "\n";
+		throw ExceptionError("Wrong inverse calculations!!");
+	}
+	cout << "++++++++++Test of Inverse Matrix is passed!!++++++++++"<<"\n";
+	return true;
+}
+
+int visit(const int index, std::vector<bool>& ioVisited, const Neighbors& iNeigh) {
+	assert(index < ioVisited.size());
+	ioVisited[index] = true;
+	int sum = 1;
+	for (const auto& Node: iNeigh[index]) {
+		if (!ioVisited[Node]) {
+			sum +=visit(Node, ioVisited, iNeigh);
+		}
+	}
+	return sum;
+}
+
+bool CheckIelandsInNetwork(Graph graph, int NrofNodes, std::string iGraphFile) {
+	auto neigh = Network(graph, NrofNodes, iGraphFile, true);
+	std::vector<bool> label(NrofNodes,false);
+	if (visit(0, label, neigh) != NrofNodes) {
+		cout << "\n" << "Graph is not connected" << "\n";
+		throw ExceptionError("The graph is not connected!!!!");
+	}
+
+	return true;
+}
+bool CheckForGraph() {
+
+	std::random_device rd;
+	std::mt19937 eng(rd());
+	std::string GraphFolder = "Regular";
+	std::uniform_int_distribution<> distr(1, 1500);//recursive will fail somwhere between 1500 and 1800
+	for (int i = 0; i < 5; i++) {
+		CheckIelandsInNetwork(Graph::cycle, distr(eng), GraphFolder);
+		CheckIelandsInNetwork(Graph::line, distr(eng), GraphFolder);
+	}
+	cout << "++++++++++Graph connection passed!!++++++++++" << "\n";
+	return true;
+}
+//bool CheckScaling() {
+//	/* test for standardizing */
+//	DataMatrix test1(3, 2);
+//	DataMatrix Scaledtest1(3, 2);
+//	test1 << 50, 30,
+//			20, 90, 
+//			30, 50;
+//	Scaledtest1 << 1.0910894511799618, -0.8728715609439694,
+//		-0.8728715609439697, 1.091089451179962, 
+//		-0.21821789023599253, -0.2182178902359923;
+//
+//	Eigen::VectorXd EstimateMeans((int)test1.cols());
+//	Eigen::VectorXd RealMeans((int)test1.cols());
+//	Eigen::VectorXd EstimateSDs((int)test1.cols());
+//	Eigen::VectorXd RealSDs((int)test1.cols());
+//	RealMeans << 33.33, 56.66;
+//	RealSDs << 15.27, 30.55;
+//	ScalingTrain(EstimateMeans, EstimateSDs, test1, "standard");
+//	for (int i = 0; i < (int)test1.cols();i++) {
+//		EstimateMeans[i] = std::floor(EstimateMeans[i] * 100) / 100;
+//		EstimateSDs[i]= std::floor(EstimateSDs[i] * 100) / 100;
+//	}
+//	if (!RealMeans.isApprox( EstimateMeans) || !RealSDs.isApprox( EstimateSDs)) {
+//		std::cout.precision(6);
+//		std::cout << "Mins " << EstimateMeans.transpose() << " is not the same as "<< RealMeans.transpose() << "\n";
+//		std::cout << "EstimateSDs " << EstimateSDs.transpose() << " is not the same as " << RealSDs.transpose() << "\n";
+//		throw ExceptionError("The mean and SDs are wrong!!!");
+//	}
+//
+//	if (!(test1.isApprox(Scaledtest1))) {
+//		cout << "test2 " << "\n" << test1 << "\n";
+//		cout << "Scaledtest2 " << "\n" << Scaledtest1 << "\n";
+//		throw ExceptionError("The matrix is wrongly scaled!!!");
+//	}
+//	/* test for normalizing */
+//	DataMatrix test2(2, 2);
+//	DataMatrix Scaledtest2(2, 2);
+//	test2 << 50, 30,
+//		20, 90;
+//	Scaledtest2 << 1, 0,
+//		0, 1;
+//	Eigen::VectorXd EstimateMins((int)test2.cols());
+//	Eigen::VectorXd RealMins((int)test2.cols());
+//	Eigen::VectorXd EstimateMaxs((int)test2.cols());
+//	Eigen::VectorXd RealMaxs((int)test2.cols());
+//	ScalingTrain(EstimateMins, EstimateMaxs, test2, "normal");
+//	RealMins << 20, 30;
+//	RealMaxs << 50, 90;
+//	for (int i = 0; i < (int)test2.cols(); i++) {
+//		EstimateMins[i] = std::floor(EstimateMins[i] * 100) / 100;
+//		EstimateMaxs[i] = std::floor(EstimateMaxs[i] * 100) / 100;
+//	}
+//	if (!RealMins.isApprox( EstimateMins) || !RealMaxs.isApprox( EstimateMaxs)) {
+//		std::cout << "Minss " << EstimateMins.transpose() << " is not the same as " << RealMins.transpose() << "\n";
+//		std::cout << "EstimateSDs " << EstimateMaxs.transpose() << " is not the same as " << RealMaxs.transpose() << "\n";
+//		throw ExceptionError("The mins and maxs are wrong!!!");
+//	}
+//
+//	if (!(test2.isApprox(Scaledtest2))) {
+//		cout << "test2 " << "\n" << test2 << "\n";
+//		cout << "Scaledtest2 " << "\n" << Scaledtest2 << "\n";
+//		throw ExceptionError("The matrix is wrongly scaled!!!");
+//	}
+//
+//	cout << "++++++++++Scaling is passed!!++++++++++" << "\n";
+//	return true;
+//
+//}
+bool SuffleTest() {
+	RowMajorMatirx Data(12, 2);
+	Eigen::VectorXd label(12);
+	for (int i = 0; i < (int)Data.rows(); i++) {
+		Data(i, 0) = i;
+		Data(i, 1) = i;
+		label[i] = i;
+	}
+	//cout << "Data : " << "\n" << Data << "\n" << "Label : " << "\n" << label<< "\n";
+	ShuffleRandomly(Data, label);
+	//cout << "Data : " << "\n" << Data << "\n" << "Label : " << "\n" << label << "\n";
+	for (int i = 0; i < (int)Data.rows(); i++) {
+		if (Data.row(i).sum() / 2 != label[i]) {
+			cout << "Data : " << Data.row(i) << ", Label : " << label[i] << "\n";
+			throw ExceptionError("Wrong shuffeling!!");
+		}
+	}
+
+	cout << "++++++++++Suffleing test passed!!++++++++++" << "\n";
+
+	return true;
+}
+bool TestInfoKernel() {
+	int Nodes = 4;
+#ifndef MPIRUN
+	my_paral::execution::parallel_policy policy = my_paral::execution::par;
+#endif
+	TypeForKernel iKerneltype = TypeForKernel::rbf;
+	double Gamma = 0.5;
+	std::string TrainsetT = ReadDataSetFile();
+	TrainsetT.append("simple1.dat");
+	fs::path TrainfilePath = fs::u8path(TrainsetT);
+	bool foundSettingFile = false;
+	auto&& TestData = FileReader(TrainfilePath);
+
+	auto&& partResT = Partitioning(TestData.Data, TestData.lables, Nodes, false, Graph::FiveReg);
+	TrainfilePath.replace_extension(".validation");
+
+	std::vector<Eigen::MatrixXd> TestInfo1(Nodes);
+	std::vector<Eigen::MatrixXd> TestInfo2(Nodes);
+	for (int test = 0; test < Nodes; test++) {
+		TestInfo1[test] = K(TestData.Data, get<0>(partResT[test]), iKerneltype, Gamma); //Memory intensive
+
+	}
+#ifndef MPIRUN
+	std::transform(policy, cbegin(partResT), cend(partResT), begin(TestInfo2), [&](const auto& data) {
+		return K(TestData.Data, get<0>(data), iKerneltype, Gamma);
+	});
+#endif
+	for (int i = 0; i < Nodes; i++) {
+		//cout << "TestInfo1[" <<i << "]" << "\n" << TestInfo1[i] << "\n";
+		//cout << "TestInfo2[" << i << "]" << "\n" << TestInfo2[i] << "\n";
+		if (!TestInfo1[i].isApprox(TestInfo2[i]))
+			throw ExceptionError("The parallel and serial calculation of the kernel for testing is not the same!!");
+	}
+	cout << "The parallel and serial calculation of the kernel passed" << "\n";
+	return true;
+}
+std::vector<int> CheckNeighPerThread(Graph igraph, int world_rank, int iworld_size, std::string iGraphFile) {
+	Neighbors neighborsVectors;
+	std::vector<int> localNeigVec;
+	int localNeigSize = -1;
+	if (world_rank == 0) {
+		int slaveSize = iworld_size - 1;
+		std::vector<MPI_Request> sendReq1(slaveSize);
+		neighborsVectors = Network(igraph, iworld_size, iGraphFile, true);
+
+		auto start_Communi3 = TimeType::now(); // Time for getting neighbors for each thread
+
+		localNeigVec = neighborsVectors[0]; ///%%%%%%%%%%%%%%%%%%%%
+		localNeigSize = (int)localNeigVec.size();
+
+		for (int i = 0; i < slaveSize; i++) {
+			int proc = i + 1;
+			int sizeVec = (int)neighborsVectors[proc].size();
+
+			MPI_Isend(&sizeVec, 1, MPI_INT, proc, 0, MPI_COMM_WORLD, &sendReq1[i]);
+		}
+		MPI_Await(sendReq1);
+		for (int i = 0; i < slaveSize; i++) {
+			int proc = i + 1;
+			int sizeLocalNeigh = neighborsVectors[proc].size();
+			MPI_Isend(&neighborsVectors[proc][0], sizeLocalNeigh, MPI_INT, proc, 0, MPI_COMM_WORLD, &sendReq1[i]);
+		}
+		MPI_Await(sendReq1);
+	}
+	else {
+		MPI_Status st;
+		MPI_Recv(&localNeigSize, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &st);
+		localNeigVec.resize(localNeigSize);
+		MPI_Recv(&localNeigVec[0], localNeigSize, MPI_INT, 0, 0, MPI_COMM_WORLD, &st);
+	}
+	return localNeigVec;
+}
+void TestingNeighborhood() {
+	int world_size{ -1 }, world_rank{ -1 };
+	MPI_Init(NULL, NULL); //initialize MPI
+	MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+	MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+	std::vector<int> localNeig;
+	localNeig = CheckNeighPerThread(Graph::ThreeReg, world_rank, world_size, "Regular");
+	std::cout << "Node[" << world_rank << "]: ";
+	for (int i = 0; i < localNeig.size(); i++) {
+		std::cout << localNeig[i] << ", ";
+	}
+	std::cout << endl;
+	MPI_Finalize();
+}
+void testOfCode() //Compares a linear and nonlinear(with linear kernel) with each other
+{
+	{ // I could not put this in a function it did not print out outputs
+		int world_size{ -1 }, world_rank{ -1 };
+		MPI_Init(NULL, NULL); //initialize MPI
+		MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+		MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+		CheckSpliceTime(createTestProblem(ProblemToTest::splice));
+
+		//std::vector<int> localNeig;
+		//localNeig = CheckNeighPerThread(Graph::ThreeReg, world_rank, world_size, "Regular");
+		//std::cout << "Node[" << world_rank << "]: ";
+		//for (int i = 0; i < localNeig.size(); i++) {
+		//	std::cout << localNeig[i] << ", ";
+		//}
+		std::cout << endl;
+		MPI_Finalize();
+	}
+
+	//runLinearVsNonLinear(createTestProblem(ProblemToTest::SimpleLinear2_first6Values));
+	//compareCodewithActualResults(createTestProblem(ProblemToTest::SimpleLinear2));
+	//testOfLambda(createTestProblem(ProblemToTest::fourclass1));
+	//testOfLambda(createTestProblem(ProblemToTest::SimpleLinear2));
+	//BroadcastingTest(createTestProblem(ProblemToTest::simpleLinear2_16));
+	//testOfGradient(createTestProblem(ProblemToTest::SimpleLinear2));
+	//testOfGradient(createTestProblem(ProblemToTest::splice20GradTest));
+	//testOfGradient(createTestProblem(ProblemToTest::Simple1));
+	//testOfGradient(createTestProblem(ProblemToTest::fourclass100GradTest));
+	//testOfGradient(createTestProblem(ProblemToTest::heart));
+	//TestOfInverseMat(createTestProblem(ProblemToTest::splice20GradTest));
+	//TestCrossValidation2(4);
+
+	////HitRateSplice(createTestProblem(ProblemToTest::spliceForHitRate));
+ //	CheckForGraph();
+	//SuffleTest();
+	//CheckScaling();
+	//TestInfoKernel();
+}
